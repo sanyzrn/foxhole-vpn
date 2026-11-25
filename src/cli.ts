@@ -12,6 +12,7 @@ import { Connection, findCountry } from "./connection.js";
 import { fetchEntitlement, useRelay, GuardianBlocked } from "./guardian.js";
 import { loadRelay } from "./httprelay.js";
 import { startProxy } from "./proxy.js";
+import { checkManualHttps, manualHttpsConfig } from "./manual-https.js";
 import { firewallHint, lanIp } from "./netinfo.js";
 import { useSplit, splitSummary, type Split } from "./split.js";
 import { useBlocker, blockerOf, refreshBlocker } from "./blocker.js";
@@ -699,6 +700,9 @@ ${bold("Commands:")}
   login                Sign in to the Firefox browser (its VPN needs it)
   proxy [--country XX] [--port N] [--host H]
                        Run a local SOCKS5 + HTTP proxy through the VPN
+  windscribe-check     Test a manually configured HTTPS proxy (experimental)
+  windscribe-proxy [--port N]
+                       Serve it locally as SOCKS5/HTTP, TCP only
   global [--country XX] [--force]
                        Route ALL system traffic through the VPN
                        (${WIN ? "Administrator" : "asks for your password once, for the network helper"})
@@ -729,7 +733,33 @@ async function notice() {
   if (news) console.error("\n" + yellow(news));
 }
 
+async function cmdManualHttps(serve: boolean): Promise<void> {
+  const config = manualHttpsConfig(process.env);
+  const port = Number(arg("port") ?? "1081");
+  if (serve && (!Number.isInteger(port) || port < 1 || port > 65535)) throw new Error("Invalid local proxy port.");
+  const ip = await checkManualHttps(config);
+  console.log("PASS: verified HTTPS through configured proxy. Exit IP: " + ip);
+  if (!serve) return;
+  const conn = new Connection({ getAccessToken: async () => { throw new Error("Mozilla authentication disabled for this experiment."); } }, config);
+  const handle = await startProxy(conn, "127.0.0.1", port);
+  console.log("Experimental TCP-only SOCKS5/HTTP proxy: 127.0.0.1:" + handle.port + ". Ctrl+C to stop.");
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    await handle.close();
+    process.exit(0);
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+}
+
 async function main() {
+  if (process.argv[2] === "windscribe-check" || process.argv[2] === "windscribe-proxy") {
+    try { await cmdManualHttps(process.argv[2] === "windscribe-proxy"); }
+    catch (err) { console.error((err as Error).message); process.exitCode = 1; }
+    return;
+  }
   // Windows: global mode's helper, started as Administrator through Windows' admin prompt (global-win32.ts's uacPriv)
   if (process.argv[2] === HELPER_CMD) return serveElevated(process.argv[3]);
   if (process.argv[2] === "env") {

@@ -1,4 +1,5 @@
 import type { Authenticator } from "./auth.js";
+import type { ManualHttpsConfig } from "./manual-https.js";
 import {
   GuardianError,
   fetchPass,
@@ -32,7 +33,7 @@ export class Connection {
   #ended: ((err: Error) => void) | null = null;
   #endedTold: Authenticator | null = null; // the account it was told for: once each
 
-  constructor(auth: Authenticator) {
+  constructor(auth: Authenticator, readonly manualHttps: ManualHttpsConfig | null = null) {
     this.#auth = auth;
   }
 
