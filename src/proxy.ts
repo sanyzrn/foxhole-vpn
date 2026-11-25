@@ -3,6 +3,7 @@ import tls from "node:tls";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import type { Connection } from "./connection.js";
+import { dialManualHttps } from "./manual-https.js";
 import { red, verbose } from "./ui.js";
 import { log } from "./log.js";
 import { route, splitOn, appsOn, probeOn, type Via } from "./split.js";
@@ -597,6 +598,13 @@ function dialDirect(target: Target, ms = UPSTREAM_TIMEOUT_MS): Promise<net.Socke
  * use the VPN.
  */
 async function open(conn: Connection, target: Target, name?: string, app?: string, hello?: Buffer | null): Promise<net.Socket | null> {
+  if (conn.manualHttps) {
+    try {
+      const up = await dialManualHttps(conn.manualHttps, target.host, target.port);
+      if (hello?.length) up.write(hello);
+      return up;
+    } catch { return null; }
+  }
   const fake = fakeName(target.host); // relay mode's made-up address, still cached after a switch to the VPN: by name
   if (fake) target = { host: fake, port: target.port };
   const ip = net.isIP(target.host) ? target.host : undefined;
@@ -1015,7 +1023,7 @@ async function handleSocks(socket: net.Socket, conn: Connection, greeting: Buffe
   const target = await readRequest(socket);
   if (target.udp) {
     // the relay carries only the web: as before UDP was carried at all, an app's UDP finds no way and it falls back
-    if (conn.relay) return void socket.end(Buffer.from([SOCKS_VERSION, 0x07, 0x00, ATYP_IPV4, 0, 0, 0, 0, 0, 0]));
+    if (conn.relay || conn.manualHttps) return void socket.end(Buffer.from([SOCKS_VERSION, 0x07, 0x00, ATYP_IPV4, 0, 0, 0, 0, 0, 0]));
     return udpAssociate(socket, conn, pastTun);
   }
   if (probing && target.host === PROBE.host && target.port === PROBE.port) return void ((probeSeen = true), socket.destroy());
@@ -1172,9 +1180,9 @@ export async function startProxy(
     server.once("error", reject);
     server.listen(port, host, () => {
       const addr = server.address() as net.AddressInfo;
-      listsVia({ host: host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host, port: addr.port }); // smart's new lists come through the VPN
+      if (!conn.manualHttps) listsVia({ host: host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host, port: addr.port }); // smart's new lists come through the VPN
       const tunnel = (h: string, p: number) => ownTunnel(conn, { host: h, port: p });
-      useTunnel(tunnel); // Mozilla's calls too, while it runs
+      if (!conn.manualHttps) useTunnel(tunnel); // Mozilla's calls too, while it runs
       resolve({
         port: addr.port,
         // server.close() alone waits for every client to hang up, and browsers keep
